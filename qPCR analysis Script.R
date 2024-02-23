@@ -3,20 +3,22 @@ library(tm)
 library(ggplot2)
 library(forcats)
 library(plotrix)
-path <- "~/storage/qPCR Analysis/PFOA"
+path <- "~/storage/qPCR Analysis/Phenanthrene qPCR"
 output_dir = paste0(path,"/output/")
 unlink(output_dir, recursive = TRUE)
 reps <- list.dirs(path,recursive = FALSE)
 rep<-0
 CTdf <- data.frame()
+
 for (reppath in reps){ 
   print(reppath)
   rep <- rep+1
   plates <- list.dirs(reppath,recursive = FALSE) 
+  plate <-0
   for (platepath in plates) { 
     files <- list.files(platepath, pattern=NULL, all.files=FALSE, 
                         full.names=FALSE)
-    
+    plate<-plate+1
     df <- data.frame(value = character(),well = character())
     colnames(df) <- c("value", "well")
     for (file in files) { 
@@ -53,28 +55,30 @@ for (reppath in reps){
     joined <- inner_join(bactin, gene_of_interest, by ='chemical')
     joined
     joined$DeltaCT <- joined$average_CT.y-joined$average_CT.x
-    controls_to_check <- c("DMSO", "Ethanol")
-    joined$chemicalgroup <- gsub(controls_to_check, "", removeNumbers(joined$chemical))
+    control_to_check <- "MIR + veh con "
+    joined$chemicalgroup <- gsub(control_to_check, "", removeNumbers(joined$chemical))
+    joined$chemicalgroup <- gsub("\\.", "", joined$chemicalgroup)
     joined$chemicalgroup <- trimws(joined$chemicalgroup)
     joined <- joined %>%
-      mutate(control = ifelse(grepl(paste(controls_to_check, collapse = "|"), chemical, ignore.case = TRUE) ==TRUE, "C", ""))
+      mutate(control = ifelse(chemical ==control_to_check, "C", ""))
     joined <- joined %>% 
-      group_by(chemicalgroup) %>%
+      group_by(gene.y) %>%
       mutate(DDCT = DeltaCT-DeltaCT[control=="C"]) 
-    joined$RQ <- 2^(-joined$DDCT)
+    joined$RQ <- round(2^(-joined$DDCT), digits=2) 
     joined$rep <- rep
-    CTdf <- rbind(CTdf,joined %>% select("gene" = gene.y,RQ,chemical, chemicalgroup,rep))
+    joined$plate <- plate
+    CTdf <- rbind(CTdf,joined %>% select("gene" = gene.y,RQ,chemical, chemicalgroup,rep,plate))
   }
   
 }
-write.table(CTdf,paste0(path,"allres.txt"),sep="\t", row.names=FALSE)
+dir.create(output_dir)
 rep_avg <- CTdf %>%
   group_by(chemical, gene, chemicalgroup) %>%
   summarize(
-    average_RQ = mean(RQ, na.rm = TRUE),
-    SEM = std.error(RQ, na.rm = TRUE)
+    average_RQ = round(mean(RQ, na.rm = TRUE), digits = 2),
+    SEM = std.error(RQ, na.rm = TRUE),
   )
-
+rep_avg <- rep_avg[is.na(rep_avg$SEM)==FALSE,]
 unique_chemicalgroups <- unique(rep_avg$chemicalgroup)
 unique_genes <- unique(rep_avg$gene)
 
@@ -85,7 +89,6 @@ for (chemgroup in unique_chemicalgroups){
     subset_table$concentration <- as.numeric(gsub("[^0-9]", "", subset_table$chemical))
     subset_table <- subset_table[order(subset_table$concentration), ]
     print(subset_table)
-      dir.create(output_dir)
       #write.table(subset_table,paste0(output_dir,chemgroup,"-",g,".txt"),sep="\t", row.names=FALSE)
       plot <- ggplot(subset_table, aes(x = fct_inorder(chemical), y = average_RQ)) +
         geom_bar(stat = "identity", fill = "grey", color = "black", width = 0.7) +
@@ -97,6 +100,7 @@ for (chemgroup in unique_chemicalgroups){
   }
 
 
-write.table(CTdf,paste0(path,"res.txt"),sep="\t", row.names=FALSE)
+write.table(CTdf,paste0(output_dir,"resall.txt"),sep="\t", row.names=FALSE)
+write.table(rep_avg,paste0(output_dir,"ressummary.txt"),sep="\t", row.names=FALSE)
 
 
