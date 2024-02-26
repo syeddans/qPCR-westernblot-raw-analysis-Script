@@ -3,22 +3,33 @@ library(tm)
 library(ggplot2)
 library(forcats)
 library(plotrix)
-path <- "~/storage/qPCR Analysis/PFOA"
+library(matrixStats)
+library(remotes)
+library("multcompView")
+#remotes::install_github("snandi/RFunctionsSN")
+library(RFunctionsSN)
+options(dplyr.summarise.inform = FALSE)
+
+
+path <- "~/storage/qPCR Analysis/Phenanthrene qPCR"
 output_dir = paste0(path,"/output/")
 unlink(output_dir, recursive = TRUE)
 reps <- list.dirs(path,recursive = FALSE)
-rep<-0
+rep <-0
 CTdf <- data.frame()
+
+
 for (reppath in reps){ 
-  print(reppath)
   rep <- rep+1
   plates <- list.dirs(reppath,recursive = FALSE) 
-  for (platepath in plates) { 
-    files <- list.files(platepath, pattern=NULL, all.files=FALSE, 
-                        full.names=FALSE)
+  rep_result_df <- data_frame("chemical" = character(0), "gene" = character(0), "RQ"  = numeric(0))
+  
+  #for each of the plates available 
+  for (platepath in plates) {
+    files <- list.files(platepath, pattern=NULL, all.files=FALSE,full.names=FALSE)
+    platesoutput <- data.frame(value = character(),well = character())
     
-    df <- data.frame(value = character(),well = character())
-    colnames(df) <- c("value", "well")
+    #match value in file type to well to be able to link together later
     for (file in files) { 
       dftemp = data_frame()
       table = read.csv(paste0(platepath,"/",file),sep=",",header=FALSE,fill = TRUE)
@@ -28,75 +39,100 @@ for (reppath in reps){
           dftemp = rbind(dftemp, c(table[row,col], paste0(table[row,1],table[1,col])))
         }
       }
+      
+      #generate plate data given file type inputs 
       if (grepl("-CTmap", file, ignore.case = TRUE)){ 
-        colnames(dftemp) <- c("CT value", "well")
+        colnames(dftemp) <- c("CTvalue", "well")
       } else if (grepl("-wellmap", file, ignore.case = TRUE)) { 
         colnames(dftemp) <- c("chemical", "well")
       } else if (grepl("-genemap", file, ignore.case = TRUE)) { 
         colnames(dftemp) <- c("gene", "well")
       }
-      
-      if (nrow(df) ==0){ 
-        df = rbind(df,dftemp)
-        colnames(df) <- colnames(dftemp)
+      if (nrow(platesoutput) ==0){ 
+        platesoutput <- dftemp
       } else { 
-        df <- left_join(df,dftemp, by="well")
+        platesoutput <- left_join(platesoutput,dftemp, by="well")
       }
+      
     }
-    df <- df[complete.cases(df), ]
-    df$`CT value`<- as.numeric(df$`CT value`)
-    average_df <- df %>%
+    #find technical replicates average for plate 
+    platesoutput <- platesoutput[complete.cases(platesoutput), ]
+    platesoutput$CTvalue<- as.numeric(platesoutput$CTvalue)
+    average_df <- platesoutput %>%
       group_by(gene, chemical) %>%
-      summarize(average_CT = mean(`CT value`, na.rm = TRUE))
+      summarize(average_CT = mean(CTvalue, na.rm = TRUE))
+    
+    #find control gene (usually b-actin) and calculate DeltaCT
     bactin <- filter(average_df, gene == 'b-actin')
     gene_of_interest <- filter(average_df, gene != 'b-actin')
-    joined <- inner_join(bactin, gene_of_interest, by ='chemical')
-    joined
+    joined <- left_join(bactin, gene_of_interest, by ='chemical')
     joined$DeltaCT <- joined$average_CT.y-joined$average_CT.x
-    controls_to_check <- c("DMSO", "Ethanol")
-    joined$chemicalgroup <- gsub(controls_to_check, "", removeNumbers(joined$chemical))
-    joined$chemicalgroup <- trimws(joined$chemicalgroup)
+    
+    #find control treatment samples and calculate Delta Delta CT and RQ
+    control_to_check <- "MIR + veh con "
     joined <- joined %>%
-      mutate(control = ifelse(grepl(paste(controls_to_check, collapse = "|"), chemical, ignore.case = TRUE) ==TRUE, "C", ""))
+      mutate(control = ifelse(chemical ==control_to_check, "C", ""))
     joined <- joined %>% 
-      group_by(chemicalgroup) %>%
+      group_by(gene.y) %>%
       mutate(DDCT = DeltaCT-DeltaCT[control=="C"]) 
-    joined$RQ <- 2^(-joined$DDCT)
-    joined$rep <- rep
-    CTdf <- rbind(CTdf,joined %>% select("gene" = gene.y,RQ,chemical, chemicalgroup,rep))
+    joined$RQ <- round(2^(-joined$DDCT), digits=2) 
+    names(joined)[names(joined) == "gene.y"] <- "gene"
+    rep_result_df <- rbind(rep_result_df, joined[,c("chemical","gene","RQ")])
   }
-  
-}
-write.table(CTdf,paste0(path,"allres.txt"),sep="\t", row.names=FALSE)
-rep_avg <- CTdf %>%
-  group_by(chemical, gene, chemicalgroup) %>%
-  summarize(
-    average_RQ = mean(RQ, na.rm = TRUE),
-    SEM = std.error(RQ, na.rm = TRUE)
-  )
-
-unique_chemicalgroups <- unique(rep_avg$chemicalgroup)
-unique_genes <- unique(rep_avg$gene)
-
-for (chemgroup in unique_chemicalgroups){ 
-  for (g in unique_genes) { 
-    subset_table <- rep_avg %>%
-      filter(chemicalgroup == chemgroup, gene == g)
-    subset_table$concentration <- as.numeric(gsub("[^0-9]", "", subset_table$chemical))
-    subset_table <- subset_table[order(subset_table$concentration), ]
-    print(subset_table)
-      dir.create(output_dir)
-      #write.table(subset_table,paste0(output_dir,chemgroup,"-",g,".txt"),sep="\t", row.names=FALSE)
-      plot <- ggplot(subset_table, aes(x = fct_inorder(chemical), y = average_RQ)) +
-        geom_bar(stat = "identity", fill = "grey", color = "black", width = 0.7) +
-        geom_errorbar(aes(ymin = average_RQ - SEM, ymax = average_RQ + SEM), width = 0.25, position = position_dodge(0.7)) +
-        labs(title =g, x = "Chemical Concentration", y = "Fold Change") + 
-        theme_bw()
-      ggsave(paste0(output_dir,chemgroup,"-",g,".png"), plot = plot, width = 6, height = 4, units = "in", dpi = 300)
+   
+   rep_result_df <- rep_result_df %>% 
+     group_by(chemical,gene) %>%
+     summarize(RQ = mean(RQ))
+  if(nrow(CTdf)==0){ 
+    CTdf <- bind_rows(CTdf,rep_result_df)
+  }
+  else{ 
+    #checks to see if there are any genes tested for in the rep that do not have a previous rep 
+    #if it is new genes and not a rep then it adds to the table 
+    RQ_rep<- paste0("RQ",as.character(rep))
+    names(rep_result_df)[names(rep_result_df) == "RQ"] <- RQ_rep
+    nonmatching <-anti_join(rep_result_df, CTdf, by= c("chemical", "gene"))
+    if(nrow(nonmatching)!=0) {
+      CTdf <- bind_rows(CTdf,nonmatching)
+      rep_result_df <- rep_result_df[!rep_result_df$chemical %in% nonmatching$chemical, ]
     }
+    #if this is a new rep it adds the column 
+    if(all(rep_result_df$gene %in% CTdf$gene) && all(rep_result_df$chemical %in% CTdf$chemical)){
+      CTdf<- left_join(CTdf, rep_result_df, by= c("chemical", "gene"))
+    }
+    columns_to_merge <- grep(paste0("^",RQ_rep), names(CTdf), value = TRUE)
+    # Merge selected columns into a new column
+     
+    # Remove the original columns if needed
+    if(length(columns_to_merge)>1){ 
+      RQ_toadd<- coalesce(!!!c(CTdf[columns_to_merge]))
+      RQ_tobind <- data.frame(value = RQ_toadd)
+      colnames(RQ_tobind) <- RQ_rep
+      CTdf <- CTdf[, !names(CTdf) %in% columns_to_merge]
+      CTdf<-bind_cols(CTdf,RQ_tobind) 
+    }
+    
+    
   }
+   
+}
+
+#group by chemical and dose and calculate avg between biological replicates and standard deviation
+CTdf<- CTdf[!CTdf$chemical=="MIR + veh con ",]
+
+CTdf$chemicalgroup <- gsub(control_to_check, "", removeNumbers(CTdf$chemical))
+CTdf$chemicalgroup <- gsub("\\.", "", CTdf$chemicalgroup)
+CTdf$chemicalgroup <- trimws(CTdf$chemicalgroup)
+dir.create(output_dir)
+
+CTdf$average_RQ <- round(rowMeans(CTdf[, grepl("^RQ", names(CTdf))], na.rm = TRUE), digits=2) 
+CTdf$SEM <- apply(CTdf[, grepl("^RQ", names(CTdf))], 1, function(row) {
+  std.error(na.omit(row))
+})
+unique_chemicalgroups <- unique(CTdf$chemicalgroup)
+unique_genes <- unique(CTdf$gene)
 
 
-write.table(CTdf,paste0(path,"res.txt"),sep="\t", row.names=FALSE)
+write.table(CTdf,paste0(output_dir,"resall.txt"),sep="\t", row.names=FALSE)
 
 
