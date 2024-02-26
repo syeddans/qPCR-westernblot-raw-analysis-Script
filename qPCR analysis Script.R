@@ -79,30 +79,46 @@ for (reppath in reps){
     rep_result_df <- rbind(rep_result_df, joined[,c("chemical","gene","RQ")])
   }
    
-  
+   rep_result_df <- rep_result_df %>% 
+     group_by(chemical,gene) %>%
+     summarize(RQ = mean(RQ))
   if(nrow(CTdf)==0){ 
     CTdf <- bind_rows(CTdf,rep_result_df)
   }
   else{ 
     #checks to see if there are any genes tested for in the rep that do not have a previous rep 
-    #if this is a new rep it adds the column 
+    #if it is new genes and not a rep then it adds to the table 
+    RQ_rep<- paste0("RQ",as.character(rep))
+    names(rep_result_df)[names(rep_result_df) == "RQ"] <- RQ_rep
     nonmatching <-anti_join(rep_result_df, CTdf, by= c("chemical", "gene"))
     if(nrow(nonmatching)!=0) {
-      print("binding rows:")
-      print(head(nonmatching))
       CTdf <- bind_rows(CTdf,nonmatching)
       rep_result_df <- rep_result_df[!rep_result_df$chemical %in% nonmatching$chemical, ]
     }
-    #if it is new genes and not a rep then it adds to the table 
+    #if this is a new rep it adds the column 
     if(all(rep_result_df$gene %in% CTdf$gene) && all(rep_result_df$chemical %in% CTdf$chemical)){
-      names(rep_result_df)[names(rep_result_df) == "RQ"] <- paste0("RQ",as.character(rep))
       CTdf<- left_join(CTdf, rep_result_df, by= c("chemical", "gene"))
     }
+    columns_to_merge <- grep(paste0("^",RQ_rep), names(CTdf), value = TRUE)
+    # Merge selected columns into a new column
+     
+    # Remove the original columns if needed
+    if(length(columns_to_merge)>1){ 
+      RQ_toadd<- coalesce(!!!c(CTdf[columns_to_merge]))
+      RQ_tobind <- data.frame(value = RQ_toadd)
+      colnames(RQ_tobind) <- RQ_rep
+      CTdf <- CTdf[, !names(CTdf) %in% columns_to_merge]
+      CTdf<-bind_cols(CTdf,RQ_tobind) 
     }
+    
+    
+  }
+   
 }
 
 #group by chemical and dose and calculate avg between biological replicates and standard deviation
 CTdf<- CTdf[!CTdf$chemical=="MIR + veh con ",]
+
 CTdf$chemicalgroup <- gsub(control_to_check, "", removeNumbers(CTdf$chemical))
 CTdf$chemicalgroup <- gsub("\\.", "", CTdf$chemicalgroup)
 CTdf$chemicalgroup <- trimws(CTdf$chemicalgroup)
@@ -114,6 +130,7 @@ CTdf$SEM <- apply(CTdf[, grepl("^RQ", names(CTdf))], 1, function(row) {
 })
 unique_chemicalgroups <- unique(CTdf$chemicalgroup)
 unique_genes <- unique(CTdf$gene)
+
 
 write.table(CTdf,paste0(output_dir,"resall.txt"),sep="\t", row.names=FALSE)
 
