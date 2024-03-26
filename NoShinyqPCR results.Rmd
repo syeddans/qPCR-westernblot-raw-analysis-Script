@@ -1,0 +1,86 @@
+---
+title: "Syed + Euanara Data western results"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r run script, echo = FALSE,warning = FALSE, message = FALSE, progress = FALSE} 
+
+source("~/storage/qPCR Analysis/qPCR analysis Script.R", local = TRUE)
+
+```
+
+```{r plotly-crosstalk, echo = FALSE,warning = FALSE, message = FALSE, progress = FALSE}
+library(DT)
+library(dplyr)
+library(tidyr)
+library(tm)
+library(ggplot2)
+library(forcats)
+library(plotrix)
+library(matrixStats)
+library(remotes)
+library("multcompView")
+library("plotly")
+library("crosstalk")
+library("d3scatter")
+
+
+chemical_ct <- SharedData$new(CTdf)
+
+# Step 2-4: Loop through each unique gene, subset data, and create shared objects
+filter_checkbox("chl", "chemical", chemical_ct, ~chemicalgroup, inline = TRUE)
+if(analysistype=="western"){
+  filter_checkbox("prn", "protein", chemical_ct, ~protein, inline = TRUE)
+}else{ 
+  filter_checkbox("gene", "gene", chemical_ct, ~gene, inline = TRUE)
+}
+
+dt <- datatable(chemical_ct)
+dt
+
+
+# Specify a set of main colors
+main_colors <- c("red", "blue", "green", "yellow", "orange", "purple", "cyan", "magenta", "brown", "gray")
+
+plot <-plot_ly(
+  data = chemical_ct,
+   error_y = ~list(
+    type = 'data', 
+    array = CTdf$SEM,
+    color = "black"
+  ),
+  x = ~chemical,
+  y = ~average_RQ,
+  type = 'bar',
+  color = ~graphing_sort,
+  colors = main_colors,
+  name = ~chemical, 
+  
+  texttemplate = ~Letters,
+  textposition = "outside",
+  textfont = list(color = "black",
+                  size = 30),
+  outsidetextfont = list(color="black")
+ 
+) %>%
+  layout(
+    xaxis = list(title = "Chemical Concentration",
+                 tickmode = 'array',  # Set tick mode to 'array'
+                  tickvals = ~chemical,  # Set tick values to be the same as x 
+                    ticktext = ~chemical,
+                 tickangle = 90,
+                 categoryorder = "category ascending"),
+    yaxis = list(title = "Fold Change"),
+    bargap = 0.1,
+    width = 800, 
+    height = 800
+  ) 
+plot
+
+
+```
